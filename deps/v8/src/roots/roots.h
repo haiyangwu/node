@@ -199,6 +199,9 @@ class Symbol;
     TrampolineTrivialCodeDataContainer)                                        \
   V(CodeDataContainer, trampoline_promise_rejection_code_data_container,       \
     TrampolinePromiseRejectionCodeDataContainer)                               \
+  /* Canonical scope infos */                                                  \
+  V(ScopeInfo, global_this_binding_scope_info, GlobalThisBindingScopeInfo)     \
+  V(ScopeInfo, empty_function_scope_info, EmptyFunctionScopeInfo)              \
   /* Hash seed */                                                              \
   V(ByteArray, hash_seed, HashSeed)
 
@@ -270,8 +273,6 @@ class Symbol;
 
 // Entries in this list are limited to Smis and are not visited during GC.
 #define SMI_ROOT_LIST(V)                                                       \
-  V(Smi, stack_limit, StackLimit)                                              \
-  V(Smi, real_stack_limit, RealStackLimit)                                     \
   V(Smi, last_script_id, LastScriptId)                                         \
   V(Smi, last_debugging_id, LastDebuggingId)                                   \
   /* To distinguish the function templates, so that we can find them in the */ \

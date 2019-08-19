@@ -247,8 +247,7 @@ namespace internal {
   F(ThrowTypeError, -1 /* >= 1 */, 1)                \
   F(ThrowTypeErrorIfStrict, -1 /* >= 1 */, 1)        \
   F(Typeof, 1, 1)                                    \
-  F(UnwindAndFindExceptionHandler, 0, 1)             \
-  F(FinalizationGroupCleanupJob, 1, 1)
+  F(UnwindAndFindExceptionHandler, 0, 1)
 
 #define FOR_EACH_INTRINSIC_LITERALS(F, I)           \
   F(CreateArrayLiteral, 4, 1)                       \
@@ -530,28 +529,30 @@ namespace internal {
   F(TypedArraySet, 2, 1)                    \
   F(TypedArraySortFast, 1, 1)
 
-#define FOR_EACH_INTRINSIC_WASM(F, I) \
-  F(ThrowWasmError, 1, 1)             \
-  F(ThrowWasmStackOverflow, 0, 1)     \
-  F(WasmI32AtomicWait, 4, 1)          \
-  F(WasmI64AtomicWait, 5, 1)          \
-  F(WasmAtomicNotify, 3, 1)           \
-  F(WasmExceptionGetValues, 1, 1)     \
-  F(WasmExceptionGetTag, 1, 1)        \
-  F(WasmMemoryGrow, 2, 1)             \
-  F(WasmRunInterpreter, 2, 1)         \
-  F(WasmStackGuard, 0, 1)             \
-  F(WasmThrowCreate, 2, 1)            \
-  F(WasmThrowTypeError, 0, 1)         \
-  F(WasmRefFunc, 1, 1)                \
-  F(WasmFunctionTableGet, 3, 1)       \
-  F(WasmFunctionTableSet, 4, 1)       \
-  F(WasmTableInit, 5, 1)              \
-  F(WasmTableCopy, 5, 1)              \
-  F(WasmTableGrow, 3, 1)              \
-  F(WasmTableFill, 4, 1)              \
-  F(WasmIsValidFuncRefValue, 1, 1)    \
-  F(WasmCompileLazy, 2, 1)
+#define FOR_EACH_INTRINSIC_WASM(F, I)   \
+  F(ThrowWasmError, 1, 1)               \
+  F(ThrowWasmStackOverflow, 0, 1)       \
+  F(WasmI32AtomicWait, 4, 1)            \
+  F(WasmI64AtomicWait, 5, 1)            \
+  F(WasmAtomicNotify, 3, 1)             \
+  F(WasmExceptionGetValues, 1, 1)       \
+  F(WasmExceptionGetTag, 1, 1)          \
+  F(WasmMemoryGrow, 2, 1)               \
+  F(WasmRunInterpreter, 2, 1)           \
+  F(WasmStackGuard, 0, 1)               \
+  F(WasmThrowCreate, 2, 1)              \
+  F(WasmThrowTypeError, 0, 1)           \
+  F(WasmRefFunc, 1, 1)                  \
+  F(WasmFunctionTableGet, 3, 1)         \
+  F(WasmFunctionTableSet, 4, 1)         \
+  F(WasmTableInit, 5, 1)                \
+  F(WasmTableCopy, 5, 1)                \
+  F(WasmTableGrow, 3, 1)                \
+  F(WasmTableFill, 4, 1)                \
+  F(WasmIsValidFuncRefValue, 1, 1)      \
+  F(WasmCompileLazy, 2, 1)              \
+  F(WasmNewMultiReturnFixedArray, 1, 1) \
+  F(WasmNewMultiReturnJSArray, 1, 1)
 
 #define FOR_EACH_INTRINSIC_RETURN_PAIR_IMPL(F, I) \
   F(DebugBreakOnBytecode, 1, 2)                   \
@@ -769,11 +770,11 @@ V8_EXPORT_PRIVATE std::ostream& operator<<(std::ostream&, Runtime::FunctionId);
 //---------------------------------------------------------------------------
 // Constants used by interface to runtime functions.
 
-class AllocateDoubleAlignFlag : public BitField<bool, 0, 1> {};
+using AllocateDoubleAlignFlag = BitField<bool, 0, 1>;
 
-class AllowLargeObjectAllocationFlag : public BitField<bool, 1, 1> {};
+using AllowLargeObjectAllocationFlag = BitField<bool, 1, 1>;
 
-class DeclareGlobalsEvalFlag : public BitField<bool, 0, 1> {};
+using DeclareGlobalsEvalFlag = BitField<bool, 0, 1>;
 
 // A set of bits returned by Runtime_GetOptimizationStatus.
 // These bits must be in sync with bits defined in test/mjsunit/mjsunit.js

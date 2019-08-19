@@ -207,36 +207,19 @@ enum DispatchTableElements : int {
 
 // static
 Handle<WasmModuleObject> WasmModuleObject::New(
-    Isolate* isolate, const wasm::WasmFeatures& enabled,
-    std::shared_ptr<const wasm::WasmModule> shared_module,
-    OwnedVector<const uint8_t> wire_bytes, Handle<Script> script,
-    Handle<ByteArray> asm_js_offset_table) {
-  // Create a new {NativeModule} first.
-  size_t code_size_estimate =
-      wasm::WasmCodeManager::EstimateNativeModuleCodeSize(shared_module.get());
-  auto native_module = isolate->wasm_engine()->NewNativeModule(
-      isolate, enabled, code_size_estimate,
-      wasm::NativeModule::kCanAllocateMoreMemory, std::move(shared_module));
-  native_module->SetWireBytes(std::move(wire_bytes));
-  native_module->SetRuntimeStubs(isolate);
-
-  // Delegate to the shared {WasmModuleObject::New} allocator.
-  Handle<WasmModuleObject> module_object =
-      New(isolate, std::move(native_module), script, code_size_estimate);
-  if (!asm_js_offset_table.is_null()) {
-    module_object->set_asm_js_offset_table(*asm_js_offset_table);
-  }
-  return module_object;
+    Isolate* isolate, std::shared_ptr<wasm::NativeModule> native_module,
+    Handle<Script> script) {
+  Handle<FixedArray> export_wrappers = isolate->factory()->NewFixedArray(0);
+  return New(isolate, std::move(native_module), script, export_wrappers);
 }
 
 // static
 Handle<WasmModuleObject> WasmModuleObject::New(
     Isolate* isolate, std::shared_ptr<wasm::NativeModule> native_module,
-    Handle<Script> script, size_t code_size_estimate) {
+    Handle<Script> script, Handle<FixedArray> export_wrappers) {
   const WasmModule* module = native_module->module();
-  int num_wrappers = MaxNumExportWrappers(module);
-  Handle<FixedArray> export_wrappers =
-      isolate->factory()->NewFixedArray(num_wrappers, AllocationType::kOld);
+  size_t code_size_estimate =
+      wasm::WasmCodeManager::EstimateNativeModuleCodeSize(module);
   return New(isolate, std::move(native_module), script, export_wrappers,
              code_size_estimate);
 }
@@ -1726,9 +1709,6 @@ Handle<WasmInstanceObject> WasmInstanceObject::New(
       isolate->factory()->NewFixedArray(num_imported_functions);
   instance->set_imported_function_refs(*imported_function_refs);
 
-  Handle<Code> centry_stub = CodeFactory::CEntry(isolate);
-  instance->set_centry_stub(*centry_stub);
-
   instance->SetRawMemory(nullptr, 0);
   instance->set_isolate_root(isolate->isolate_root());
   instance->set_stack_limit_address(
@@ -1968,8 +1948,7 @@ void WasmInstanceObject::ImportWasmJSFunctionIntoTable(
         instance->module_object().native_module();
     // TODO(mstarzinger): Cache and reuse wrapper code.
     const wasm::WasmFeatures enabled = native_module->enabled_features();
-    auto resolved =
-        compiler::ResolveWasmImportCall(callable, sig, enabled.bigint);
+    auto resolved = compiler::ResolveWasmImportCall(callable, sig, enabled);
     compiler::WasmImportCallKind kind = resolved.first;
     callable = resolved.second;  // Update to ultimate target.
     DCHECK_NE(compiler::WasmImportCallKind::kLinkError, kind);
@@ -2301,6 +2280,10 @@ Handle<WasmJSFunction> WasmJSFunction::New(Isolate* isolate,
   if (sig_size > 0) {
     serialized_sig->copy_in(0, sig->all().begin(), sig_size);
   }
+  // TODO(mstarzinger): Think about caching and sharing the JS-to-JS wrappers
+  // per signature instead of compiling a new one for every instantiation.
+  Handle<Code> wrapper_code =
+      compiler::CompileJSToJSWrapper(isolate, sig).ToHandleChecked();
   Handle<WasmJSFunctionData> function_data =
       Handle<WasmJSFunctionData>::cast(isolate->factory()->NewStruct(
           WASM_JS_FUNCTION_DATA_TYPE, AllocationType::kOld));
@@ -2308,9 +2291,7 @@ Handle<WasmJSFunction> WasmJSFunction::New(Isolate* isolate,
   function_data->set_serialized_parameter_count(parameter_count);
   function_data->set_serialized_signature(*serialized_sig);
   function_data->set_callable(*callable);
-  // TODO(7742): Make this callable by using a proper wrapper code.
-  function_data->set_wrapper_code(
-      isolate->builtins()->builtin(Builtins::kIllegal));
+  function_data->set_wrapper_code(*wrapper_code);
   Handle<String> name = isolate->factory()->Function_string();
   if (callable->IsJSFunction()) {
     name = JSFunction::GetName(Handle<JSFunction>::cast(callable));
@@ -2319,6 +2300,7 @@ Handle<WasmJSFunction> WasmJSFunction::New(Isolate* isolate,
   NewFunctionArgs args =
       NewFunctionArgs::ForWasm(name, function_data, function_map);
   Handle<JSFunction> js_function = isolate->factory()->NewFunction(args);
+  js_function->shared().set_internal_formal_parameter_count(parameter_count);
   return Handle<WasmJSFunction>::cast(js_function);
 }
 

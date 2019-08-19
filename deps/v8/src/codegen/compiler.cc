@@ -410,6 +410,12 @@ void InstallUnoptimizedCode(UnoptimizedCompilationInfo* compilation_info,
     DCHECK(!compilation_info->has_asm_wasm_data());
     DCHECK(!shared_info->HasFeedbackMetadata());
 
+    // If the function failed asm-wasm compilation, mark asm_wasm as broken
+    // to ensure we don't try to compile as asm-wasm.
+    if (compilation_info->literal()->scope()->IsAsmModule()) {
+      shared_info->set_is_asm_wasm_broken(true);
+    }
+
     InstallBytecodeArray(compilation_info->bytecode_array(), shared_info,
                          parse_info, isolate);
 
@@ -1181,6 +1187,9 @@ bool Compiler::CollectSourcePositions(Isolate* isolate,
   DCHECK(shared_info->HasBytecodeArray());
   DCHECK(!shared_info->GetBytecodeArray().HasSourcePositionTable());
 
+  // Source position collection should be context independent.
+  NullContextScope null_context_scope(isolate);
+
   // Collecting source positions requires allocating a new source position
   // table.
   DCHECK(AllowHeapAllocation::IsAllowed());
@@ -1215,8 +1224,10 @@ bool Compiler::CollectSourcePositions(Isolate* isolate,
   parse_info.set_collect_source_positions();
   if (FLAG_allow_natives_syntax) parse_info.set_allow_natives_syntax();
 
-  // Parse and update ParseInfo with the results.
-  if (!parsing::ParseAny(&parse_info, shared_info, isolate)) {
+  // Parse and update ParseInfo with the results. Don't update parsing
+  // statistics since we've already parsed the code before.
+  if (!parsing::ParseAny(&parse_info, shared_info, isolate,
+                         parsing::ReportErrorsAndStatisticsMode::kNo)) {
     // Parsing failed probably as a result of stack exhaustion.
     bytecode->SetSourcePositionsFailedToCollect();
     return FailWithPendingException(
@@ -2111,6 +2122,10 @@ MaybeHandle<JSFunction> Compiler::GetWrappedFunction(
 
     parse_info.set_eval();  // Use an eval scope as declaration scope.
     parse_info.set_wrapped_as_function();
+    // TODO(delphick): Remove this and instead make the wrapped and wrapper
+    // functions fully non-lazy instead thus preventing source positions from
+    // being omitted.
+    parse_info.set_collect_source_positions(true);
     // parse_info.set_eager(compile_options == ScriptCompiler::kEagerCompile);
     if (!context->IsNativeContext()) {
       parse_info.set_outer_scope_info(handle(context->scope_info(), isolate));
@@ -2217,7 +2232,28 @@ Handle<SharedFunctionInfo> Compiler::GetSharedFunctionInfo(
 
   // If we found an existing shared function info, return it.
   Handle<SharedFunctionInfo> existing;
-  if (maybe_existing.ToHandle(&existing)) return existing;
+  if (maybe_existing.ToHandle(&existing)) {
+    // If the function has been uncompiled (bytecode flushed) it will have lost
+    // any preparsed data. If we produced preparsed data during this compile for
+    // this function, replace the uncompiled data with one that includes it.
+    if (literal->produced_preparse_data() != nullptr &&
+        existing->HasUncompiledDataWithoutPreparseData()) {
+      DCHECK(literal->inferred_name()->Equals(
+          existing->uncompiled_data().inferred_name()));
+      DCHECK_EQ(literal->start_position(),
+                existing->uncompiled_data().start_position());
+      DCHECK_EQ(literal->end_position(),
+                existing->uncompiled_data().end_position());
+      Handle<PreparseData> preparse_data =
+          literal->produced_preparse_data()->Serialize(isolate);
+      Handle<UncompiledData> new_uncompiled_data =
+          isolate->factory()->NewUncompiledDataWithPreparseData(
+              literal->inferred_name(), literal->start_position(),
+              literal->end_position(), preparse_data);
+      existing->set_uncompiled_data(*new_uncompiled_data);
+    }
+    return existing;
+  }
 
   // Allocate a shared function info object which will be compiled lazily.
   Handle<SharedFunctionInfo> result =
@@ -2294,8 +2330,7 @@ bool Compiler::FinalizeOptimizedCompilationJob(OptimizedCompilationJob* job,
   return CompilationJob::FAILED;
 }
 
-void Compiler::PostInstantiation(Handle<JSFunction> function,
-                                 AllocationType allocation) {
+void Compiler::PostInstantiation(Handle<JSFunction> function) {
   Isolate* isolate = function->GetIsolate();
   Handle<SharedFunctionInfo> shared(function->shared(), isolate);
   IsCompiledScope is_compiled_scope(shared->is_compiled_scope());

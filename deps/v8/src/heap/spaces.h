@@ -190,6 +190,10 @@ class FreeListCategory {
   // {kVeryLongFreeList} by manually walking the list.
   static const int kVeryLongFreeList = 500;
 
+  // Updates |available_|, |length_| and free_list_->Available() after an
+  // allocation of size |allocation_size|.
+  inline void UpdateCountersAfterAllocation(size_t allocation_size);
+
   FreeSpace top() { return top_; }
   void set_top(FreeSpace top) { top_ = top; }
   FreeListCategory* prev() { return prev_; }
@@ -221,6 +225,7 @@ class FreeListCategory {
 
   friend class FreeList;
   friend class PagedSpace;
+  friend class MapSpace;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FreeListCategory);
 };
@@ -265,12 +270,13 @@ class FreeList {
 
   // Return the number of bytes available on the free list.
   size_t Available() {
-    size_t available = 0;
-    ForAllFreeListCategories([&available](FreeListCategory* category) {
-      available += category->available();
-    });
-    return available;
+    DCHECK(available_ == SumFreeLists());
+    return available_;
   }
+
+  // Update number of available  bytes on the Freelists.
+  void IncreaseAvailableBytes(size_t bytes) { available_ += bytes; }
+  void DecreaseAvailableBytes(size_t bytes) { available_ -= bytes; }
 
   bool IsEmpty() {
     bool empty = true;
@@ -312,11 +318,6 @@ class FreeList {
   V8_EXPORT_PRIVATE void RemoveCategory(FreeListCategory* category);
   void PrintCategories(FreeListCategoryType type);
 
-#ifdef DEBUG
-  size_t SumFreeLists();
-  bool IsVeryLong();
-#endif
-
  protected:
   class FreeListCategoryIterator final {
    public:
@@ -335,6 +336,11 @@ class FreeList {
    private:
     FreeListCategory* current_;
   };
+
+#ifdef DEBUG
+  V8_EXPORT_PRIVATE size_t SumFreeLists();
+  bool IsVeryLong();
+#endif
 
   // Tries to retrieve a node from the first category in a given |type|.
   // Returns nullptr if the category is empty or the top entry is smaller
@@ -366,10 +372,14 @@ class FreeList {
   std::atomic<size_t> wasted_bytes_{0};
   FreeListCategory** categories_ = nullptr;
 
+  // |available_|: The number of bytes in this freelist.
+  std::atomic<size_t> available_{0};
+
   friend class FreeListCategory;
   friend class Page;
   friend class MemoryChunk;
   friend class ReadOnlyPage;
+  friend class MapSpace;
 };
 
 // FreeList used for spaces that don't have freelists
@@ -412,10 +422,7 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
     external_backing_store_bytes_[ExternalBackingStoreType::kArrayBuffer] = 0;
     external_backing_store_bytes_[ExternalBackingStoreType::kExternalString] =
         0;
-    CheckOffsetsAreConsistent();
   }
-
-  void CheckOffsetsAreConsistent() const;
 
   static inline void MoveExternalBackingStoreBytes(
       ExternalBackingStoreType type, Space* from, Space* to, size_t amount);
@@ -530,8 +537,6 @@ class V8_EXPORT_PRIVATE Space : public Malloced {
 
   // Tracks off-heap memory used by this space.
   std::atomic<size_t>* external_backing_store_bytes_;
-
-  static const intptr_t kIdOffset = 9 * kSystemPointerSize;
 
   bool allocation_observers_paused_;
   Heap* heap_;
@@ -2010,6 +2015,30 @@ class V8_EXPORT_PRIVATE FreeListMany : public FreeList {
   }
 };
 
+// FreeList for maps: since maps are all the same size, uses a single freelist.
+class V8_EXPORT_PRIVATE FreeListMap : public FreeList {
+ public:
+  size_t GuaranteedAllocatable(size_t maximum_freed) override;
+
+  Page* GetPageForSize(size_t size_in_bytes) override;
+
+  FreeListMap();
+  ~FreeListMap();
+
+  V8_WARN_UNUSED_RESULT FreeSpace Allocate(size_t size_in_bytes,
+                                           size_t* node_size) override;
+
+ private:
+  static const size_t kMinBlockSize = Map::kSize;
+  static const size_t kMaxBlockSize = Page::kPageSize;
+  static const FreeListCategoryType kOnlyCategory = 0;
+
+  FreeListCategoryType SelectFreeListCategoryType(
+      size_t size_in_bytes) override {
+    return kOnlyCategory;
+  }
+};
+
 // LocalAllocationBuffer represents a linear allocation area that is created
 // from a given {AllocationResult} and can be used to allocate memory without
 // synchronization.
@@ -2108,6 +2137,10 @@ class SpaceWithLinearArea : public Space {
   V8_EXPORT_PRIVATE virtual void UpdateInlineAllocationLimit(
       size_t min_size) = 0;
 
+  V8_EXPORT_PRIVATE void UpdateAllocationOrigins(AllocationOrigin origin);
+
+  void PrintAllocationsOrigins();
+
  protected:
   // If we are doing inline allocation in steps, this method performs the 'step'
   // operation. top is the memory address of the bump pointer at the last
@@ -2125,6 +2158,9 @@ class SpaceWithLinearArea : public Space {
   // TODO(ofrobots): make these private after refactoring is complete.
   LinearAllocationArea allocation_info_;
   Address top_on_previous_step_;
+
+  size_t allocations_origins_[static_cast<int>(
+      AllocationOrigin::kNumberOfAllocationOrigins)] = {0};
 };
 
 class V8_EXPORT_PRIVATE PagedSpace
@@ -2190,17 +2226,19 @@ class V8_EXPORT_PRIVATE PagedSpace
   // Allocate the requested number of bytes in the space if possible, return a
   // failure object if not.
   V8_WARN_UNUSED_RESULT inline AllocationResult AllocateRawUnaligned(
-      int size_in_bytes);
+      int size_in_bytes, AllocationOrigin origin = AllocationOrigin::kRuntime);
 
   // Allocate the requested number of bytes in the space double aligned if
   // possible, return a failure object if not.
   V8_WARN_UNUSED_RESULT inline AllocationResult AllocateRawAligned(
-      int size_in_bytes, AllocationAlignment alignment);
+      int size_in_bytes, AllocationAlignment alignment,
+      AllocationOrigin origin = AllocationOrigin::kRuntime);
 
   // Allocate the requested number of bytes in the space and consider allocation
   // alignment if needed.
   V8_WARN_UNUSED_RESULT inline AllocationResult AllocateRaw(
-      int size_in_bytes, AllocationAlignment alignment);
+      int size_in_bytes, AllocationAlignment alignment,
+      AllocationOrigin origin = AllocationOrigin::kRuntime);
 
   size_t Free(Address start, size_t size_in_bytes, SpaceAccountingMode mode) {
     if (size_in_bytes == 0) return 0;
@@ -2773,16 +2811,19 @@ class V8_EXPORT_PRIVATE NewSpace
   void set_age_mark(Address mark) { to_space_.set_age_mark(mark); }
 
   V8_WARN_UNUSED_RESULT V8_INLINE AllocationResult
-  AllocateRawAligned(int size_in_bytes, AllocationAlignment alignment);
+  AllocateRawAligned(int size_in_bytes, AllocationAlignment alignment,
+                     AllocationOrigin origin = AllocationOrigin::kRuntime);
+
+  V8_WARN_UNUSED_RESULT V8_INLINE AllocationResult AllocateRawUnaligned(
+      int size_in_bytes, AllocationOrigin origin = AllocationOrigin::kRuntime);
 
   V8_WARN_UNUSED_RESULT V8_INLINE AllocationResult
-  AllocateRawUnaligned(int size_in_bytes);
-
-  V8_WARN_UNUSED_RESULT V8_INLINE AllocationResult
-  AllocateRaw(int size_in_bytes, AllocationAlignment alignment);
+  AllocateRaw(int size_in_bytes, AllocationAlignment alignment,
+              AllocationOrigin origin = AllocationOrigin::kRuntime);
 
   V8_WARN_UNUSED_RESULT inline AllocationResult AllocateRawSynchronized(
-      int size_in_bytes, AllocationAlignment alignment);
+      int size_in_bytes, AllocationAlignment alignment,
+      AllocationOrigin origin = AllocationOrigin::kRuntime);
 
   // Reset the allocation pointer to the beginning of the active semispace.
   void ResetLinearAllocationArea();
@@ -2961,8 +3002,7 @@ class MapSpace : public PagedSpace {
  public:
   // Creates a map space object.
   explicit MapSpace(Heap* heap)
-      : PagedSpace(heap, MAP_SPACE, NOT_EXECUTABLE,
-                   FreeList::CreateFreeList()) {}
+      : PagedSpace(heap, MAP_SPACE, NOT_EXECUTABLE, new FreeListMap()) {}
 
   int RoundSizeDownToObjectAlignment(int size) override {
     if (base::bits::IsPowerOfTwo(Map::kSize)) {
@@ -2971,6 +3011,8 @@ class MapSpace : public PagedSpace {
       return (size / Map::kSize) * Map::kSize;
     }
   }
+
+  void SortFreeList();
 
 #ifdef VERIFY_HEAP
   void VerifyObject(HeapObject obj) override;
@@ -3005,6 +3047,8 @@ class ReadOnlySpace : public PagedSpace {
   // During boot the free_space_map is created, and afterwards we may need
   // to write it into the free list nodes that were already created.
   void RepairFreeListsAfterDeserialization();
+
+  size_t Available() override { return 0; }
 
  private:
   // Unseal the space after is has been sealed, by making it writable.

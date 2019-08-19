@@ -1301,12 +1301,6 @@ void JSFinalizationGroupCleanupIterator::
   VerifyHeapPointer(isolate, finalization_group());
 }
 
-void FinalizationGroupCleanupJobTask::FinalizationGroupCleanupJobTaskVerify(
-    Isolate* isolate) {
-  CHECK(IsFinalizationGroupCleanupJobTask());
-  CHECK(finalization_group().IsJSFinalizationGroup());
-}
-
 void JSWeakMap::JSWeakMapVerify(Isolate* isolate) {
   TorqueGeneratedClassVerifiers::JSWeakMapVerify(*this, isolate);
   CHECK(table().IsEphemeronHashTable() || table().IsUndefined(isolate));
@@ -1456,7 +1450,8 @@ void JSRegExp::JSRegExpVerify(Isolate* isolate) {
       break;
     }
     case JSRegExp::IRREGEXP: {
-      bool is_native = RegExp::GeneratesNativeCode();
+      bool can_be_native = RegExp::CanGenerateNativeCode();
+      bool can_be_interpreted = RegExp::CanGenerateBytecode();
 
       FixedArray arr = FixedArray::cast(data());
       Object one_byte_data = arr.get(JSRegExp::kIrregexpLatin1CodeIndex);
@@ -1464,14 +1459,17 @@ void JSRegExp::JSRegExpVerify(Isolate* isolate) {
       // Code/ByteArray: Compiled code.
       CHECK((one_byte_data.IsSmi() &&
              Smi::ToInt(one_byte_data) == JSRegExp::kUninitializedValue) ||
-            (is_native ? one_byte_data.IsCode() : one_byte_data.IsByteArray()));
+            (can_be_interpreted && one_byte_data.IsByteArray()) ||
+            (can_be_native && one_byte_data.IsCode()));
       Object uc16_data = arr.get(JSRegExp::kIrregexpUC16CodeIndex);
       CHECK((uc16_data.IsSmi() &&
              Smi::ToInt(uc16_data) == JSRegExp::kUninitializedValue) ||
-            (is_native ? uc16_data.IsCode() : uc16_data.IsByteArray()));
+            (can_be_interpreted && uc16_data.IsByteArray()) ||
+            (can_be_native && uc16_data.IsCode()));
 
       CHECK(arr.get(JSRegExp::kIrregexpCaptureCountIndex).IsSmi());
       CHECK(arr.get(JSRegExp::kIrregexpMaxRegisterCountIndex).IsSmi());
+      CHECK(arr.get(JSRegExp::kIrregexpTierUpTicksIndex).IsSmi());
       break;
     }
     default:

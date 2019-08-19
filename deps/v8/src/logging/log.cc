@@ -871,7 +871,7 @@ void Profiler::Engage() {
 
   // Start thread processing the profiler buffer.
   base::Relaxed_Store(&running_, 1);
-  Start();
+  CHECK(Start());
 
   // Register to get ticks.
   Logger* logger = isolate_->logger();
@@ -1976,6 +1976,10 @@ void ExistingCodeLogger::LogCodeObject(Object object) {
       break;
     case AbstractCode::JS_TO_WASM_FUNCTION:
       description = "A JavaScript to Wasm adapter";
+      tag = CodeEventListener::STUB_TAG;
+      break;
+    case AbstractCode::JS_TO_JS_FUNCTION:
+      description = "A WebAssembly.Function adapter";
       tag = CodeEventListener::STUB_TAG;
       break;
     case AbstractCode::WASM_TO_CAPI_FUNCTION:

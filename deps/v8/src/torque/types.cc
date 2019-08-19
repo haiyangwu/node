@@ -276,13 +276,14 @@ std::string StructType::GetGeneratedTypeNameImpl() const {
 }
 
 // static
-std::string StructType::ComputeName(const std::string& basename,
-                                    const std::vector<const Type*>& args) {
-  if (args.size() == 0) return basename;
+std::string StructType::ComputeName(
+    const std::string& basename,
+    StructType::MaybeSpecializationKey specialized_from) {
+  if (!specialized_from) return basename;
   std::stringstream s;
   s << basename << "<";
   bool first = true;
-  for (auto t : args) {
+  for (auto t : specialized_from->specialized_types) {
     if (!first) {
       s << ", ";
     }
@@ -291,6 +292,43 @@ std::string StructType::ComputeName(const std::string& basename,
   }
   s << ">";
   return s.str();
+}
+
+std::string StructType::MangledName() const {
+  std::stringstream result;
+  // TODO(gsps): Add 'ST' as a prefix once we can control the generated type
+  // name from Torque code
+  result << basename_;
+  if (specialized_from_) {
+    for (const Type* t : specialized_from_->specialized_types) {
+      std::string arg_type_string = t->MangledName();
+      result << arg_type_string.size() << arg_type_string;
+    }
+  }
+  return result.str();
+}
+
+// static
+base::Optional<const Type*> StructType::MatchUnaryGeneric(
+    const Type* type, GenericStructType* generic) {
+  if (auto* struct_type = StructType::DynamicCast(type)) {
+    return MatchUnaryGeneric(struct_type, generic);
+  }
+  return base::nullopt;
+}
+
+// static
+base::Optional<const Type*> StructType::MatchUnaryGeneric(
+    const StructType* type, GenericStructType* generic) {
+  DCHECK_EQ(generic->generic_parameters().size(), 1);
+  if (!type->specialized_from_) {
+    return base::nullopt;
+  }
+  auto& key = type->specialized_from_.value();
+  if (key.generic != generic || key.specialized_types.size() != 1) {
+    return base::nullopt;
+  }
+  return {key.specialized_types[0]};
 }
 
 std::vector<Method*> AggregateType::Methods(const std::string& name) const {
@@ -380,6 +418,17 @@ void ClassType::Finalize() const {
   CheckForDuplicateFields();
 }
 
+std::vector<Field> ClassType::ComputeAllFields() const {
+  std::vector<Field> all_fields;
+  const ClassType* super_class = this->GetSuperClass();
+  if (super_class) {
+    all_fields = super_class->ComputeAllFields();
+  }
+  const std::vector<Field>& fields = this->fields();
+  all_fields.insert(all_fields.end(), fields.begin(), fields.end());
+  return all_fields;
+}
+
 void ClassType::GenerateAccessors() {
   // For each field, construct AST snippets that implement a CSA accessor
   // function and define a corresponding '.field' operator. The
@@ -404,8 +453,7 @@ void ClassType::GenerateAccessors() {
         MakeNode<ReturnStatement>(MakeNode<FieldAccessExpression>(
             parameter, MakeNode<Identifier>(field.name_and_type.name)));
     Declarations::DeclareMacro(load_macro_name, true, base::nullopt,
-                               load_signature, false, load_body, base::nullopt,
-                               false);
+                               load_signature, load_body, base::nullopt);
 
     // Store accessor
     IdentifierExpression* value = MakeNode<IdentifierExpression>(
@@ -425,8 +473,8 @@ void ClassType::GenerateAccessors() {
                 parameter, MakeNode<Identifier>(field.name_and_type.name)),
             value));
     Declarations::DeclareMacro(store_macro_name, true, base::nullopt,
-                               store_signature, false, store_body,
-                               base::nullopt, false);
+                               store_signature, store_body, base::nullopt,
+                               false);
   }
 }
 
@@ -560,9 +608,6 @@ void AppendLoweredTypes(const Type* type, std::vector<const Type*>* result) {
     for (const Field& field : s->fields()) {
       AppendLoweredTypes(field.name_and_type.type, result);
     }
-  } else if (type->IsReferenceType()) {
-    result->push_back(TypeOracle::GetHeapObjectType());
-    result->push_back(TypeOracle::GetIntPtrType());
   } else {
     result->push_back(type);
   }

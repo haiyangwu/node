@@ -580,9 +580,26 @@ TEST(TestGenericStruct2) {
   i::HandleScope scope(isolate);
   CodeAssemblerTester asm_tester(isolate);
   TestTorqueAssembler m(asm_tester.state());
-  { m.Return(m.TestGenericStruct2().fst); }
+  { m.Return(m.TestGenericStruct2().snd.fst); }
   FunctionTester ft(asm_tester.GenerateCode(), 0);
   ft.Call();
+}
+
+TEST(TestBranchOnBoolOptimization) {
+  CcTest::InitializeVM();
+  Isolate* isolate(CcTest::i_isolate());
+  i::HandleScope scope(isolate);
+  Handle<Context> context =
+      Utils::OpenHandle(*v8::Isolate::GetCurrent()->GetCurrentContext());
+  CodeAssemblerTester asm_tester(isolate, 1);
+  TestTorqueAssembler m(asm_tester.state());
+  {
+    m.TestBranchOnBoolOptimization(
+        m.UncheckedCast<Context>(m.HeapConstant(context)),
+        m.UncheckedCast<Smi>(m.Parameter(0)));
+    m.Return(m.UndefinedConstant());
+  }
+  asm_tester.GenerateCode();
 }
 
 }  // namespace compiler
