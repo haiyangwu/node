@@ -121,8 +121,14 @@ class ProcessWrap : public HandleWrap {
       if (type->StrictEquals(env->ignore_string())) {
         options->stdio[i].flags = UV_IGNORE;
       } else if (type->StrictEquals(env->pipe_string())) {
+#ifdef _WIN32
+        options->stdio[i].flags =
+            static_cast<uv_stdio_flags>(UV_CREATE_PIPE | UV_READABLE_PIPE |
+                                        UV_WRITABLE_PIPE | UV_OVERLAPPED_PIPE);
+#else
         options->stdio[i].flags = static_cast<uv_stdio_flags>(
             UV_CREATE_PIPE | UV_READABLE_PIPE | UV_WRITABLE_PIPE);
+#endif
         options->stdio[i].data.stream = StreamForWrap(env, stdio);
       } else if (type->StrictEquals(env->wrap_string())) {
         options->stdio[i].flags = UV_INHERIT_STREAM;
